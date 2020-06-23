@@ -210,7 +210,9 @@ fn real_main() -> Result<()> {
     let result = server.start();
 
     if result.is_err() {
-        error!(logger, "failed"; "error" => format!("{:?}", result.err()));
+        error!(logger, "failed";
+            "error" => format!("{:?}", result.err()),
+            "hint" => "is openTelemetry collector running?");
     } else {
         info!(logger, "success");
     }
