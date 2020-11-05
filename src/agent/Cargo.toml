@@ -27,10 +27,10 @@ regex = "1"
 # - The 'max_*' features allow changing the log level at runtime
 #   (by stopping the compiler from removing log calls).
 slog = { version = "2.5.2", features = ["dynamic-keys", "max_level_trace", "release_max_level_info"] }
-slog-scope = "4.1.2"
+slog-scope = "4.3.0"
 
 # Redirect ttrpc log calls
-slog-stdlog = "4.0.0"
+slog-stdlog = "4.1.0"
 log = "0.4.11"
 
 # for testing
@@ -39,6 +39,7 @@ prometheus = { version = "0.9.0", features = ["process"] }
 procfs = "0.7.9"
 anyhow = "1.0.32"
 cgroups = { git = "https://github.com/kata-containers/cgroups-rs", branch = "stable-0.1.1"}
+crossbeam-channel = "0.5.0"
 
 [workspace]
 members = [

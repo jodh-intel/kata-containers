@@ -29,16 +29,16 @@ extern crate netlink;
 
 use crate::netlink::{RtnlHandle, NETLINK_ROUTE};
 use anyhow::{anyhow, Context, Result};
+use crossbeam_channel::bounded;
+use crossbeam_channel::{select, unbounded, Receiver, Sender as cb_Sender};
 use nix::fcntl::{self, OFlag};
 use nix::fcntl::{FcntlArg, FdFlag};
 use nix::libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use nix::pty;
 use nix::sys::select::{select, FdSet};
 use nix::sys::socket::{self, AddressFamily, SockAddr, SockFlag, SockType};
-use nix::sys::wait::{self, WaitStatus};
+use nix::sys::wait;
 use nix::unistd::{self, close, dup, dup2, fork, setsid, ForkResult};
-use prctl::set_child_subreaper;
-use signal_hook::{iterator::Signals, SIGCHLD};
 use std::collections::HashMap;
 use std::env;
 use std::ffi::{CStr, CString, OsStr};
@@ -62,6 +62,7 @@ mod namespace;
 mod network;
 pub mod random;
 mod sandbox;
+mod signal;
 #[cfg(test)]
 mod test_utils;
 mod uevent;
@@ -69,6 +70,7 @@ mod version;
 
 use mount::{cgroups_mount, general_mount};
 use sandbox::Sandbox;
+use signal::setup_signal_handler;
 use slog::Logger;
 use uevent::watch_uevents;
 
@@ -98,6 +100,132 @@ fn announce(logger: &Logger, config: &agentConfig) {
     "api-version" => version::API_VERSION,
     "config" => format!("{:?}", config),
     );
+}
+
+// Read from the specified file descriptor and send the data to the provided
+// channel. Since this is part of the logger, any errors are sent to stderr to
+// avoid recursion and since there is no alternative.
+fn read_from_logger(read_fd: RawFd, ch: cb_Sender<Vec<u8>>) {
+    if read_fd == -1 {
+        eprintln!("ERROR: invalid log fd");
+        return;
+    }
+
+    let mut reader = unsafe { File::from_raw_fd(read_fd) };
+
+    loop {
+        let mut buf: Vec<u8> = vec![0; 1024];
+
+        let result = reader.read(&mut buf);
+
+        match result {
+            Ok(0) => break,
+            Ok(bytes) => {
+                match ch.send(buf[0..bytes].to_vec()) {
+                    Ok(_) => (),
+                    Err(e) => {
+                        eprintln!("ERROR: failed to send logger data: {:?}", e);
+                        break;
+                    }
+                };
+            }
+
+            Err(e) => {
+                eprintln!("ERROR: failed to read logger: {:?}", e);
+                break;
+            }
+        };
+    }
+}
+
+fn start_logger(
+    shutdown: Receiver<bool>,
+    log_vport: u32,
+    read_fd: RawFd,
+) -> Result<JoinHandle<Result<()>>> {
+    let builder = thread::Builder::new().name("logger".into());
+
+    let handle = builder.spawn(move || -> Result<()> {
+        let mut listenfd: RawFd = -1;
+        let write_fd: RawFd;
+        let drop_writer: bool;
+
+        if log_vport > 0 {
+            listenfd = socket::socket(
+                AddressFamily::Vsock,
+                SockType::Stream,
+                SockFlag::SOCK_CLOEXEC,
+                None,
+            )?;
+
+            let addr = SockAddr::new_vsock(libc::VMADDR_CID_ANY, log_vport);
+            socket::bind(listenfd, &addr)?;
+            socket::listen(listenfd, 1)?;
+            write_fd = socket::accept4(listenfd, SockFlag::SOCK_CLOEXEC)?;
+
+            drop_writer = true;
+
+        // copy data to VSOCK
+        } else {
+            // copy log to stdout
+            write_fd = io::stdout().as_raw_fd();
+            drop_writer = false;
+        }
+
+        let (tx, rx) = unbounded::<Vec<u8>>();
+
+        let builder2 = thread::Builder::new().name("logger-read-from-logger".into());
+
+        let _log_reader_thread = builder2.spawn(move || read_from_logger(read_fd, tx));
+
+        unsafe {
+            let writer = &mut File::from_raw_fd(write_fd);
+
+            loop {
+                select! {
+                    recv(rx) -> data => {
+                            if data.is_err() {
+
+                                // Synchronous calls don't allow the status to
+                                // be queried, so make a non-blocking call to
+                                // get the error condition.
+                                let status = rx.try_recv();
+
+                                if status.is_err() && status.err().unwrap() == crossbeam_channel::TryRecvError::Disconnected {
+                                    // Logger thread was shut down
+                                    continue;
+                                }
+
+                                eprintln!("ERROR: failed to read log data: {:?}", data.err());
+                                continue;
+                            }
+
+                            let msg = data.unwrap();
+
+                            let result = writer.write_all(&msg);
+                            if result.is_err() {
+                                eprintln!("ERROR: failed to write log data: {:?}", result.err());
+                            }
+                    },
+                    recv(shutdown) -> _ => {
+                        break;
+                    },
+                };
+            }
+
+            if listenfd != -1 {
+                let _ = unistd::close(listenfd);
+            }
+
+            if drop_writer && write_fd != -1 {
+                drop(writer);
+            }
+        }
+
+        Ok(())
+    })?;
+
+    Ok(handle)
 }
 
 fn main() -> Result<()> {
@@ -155,6 +283,7 @@ fn main() -> Result<()> {
         config.parse_cmdline(KERNEL_CMDLINE_FILE)?;
 
         init_agent_as_init(&logger, config.unified_cgroup_hierarchy)?;
+
         drop(logger_async_guard);
     } else {
         // once parsed cmdline and set the config, release the write lock
@@ -163,10 +292,19 @@ fn main() -> Result<()> {
         let mut config = agentConfig.write().unwrap();
         config.parse_cmdline(KERNEL_CMDLINE_FILE)?;
     }
+
+    // Create a channel to inform threads to shut themselves down
+    let (shutdown_tx, shutdown_rx) = bounded::<bool>(1);
+
     let config = agentConfig.read().unwrap();
 
     let log_vport = config.log_vport as u32;
-    let log_handle = thread::spawn(move || -> Result<()> {
+
+    let _log_handle = start_logger(shutdown_rx.clone(), log_vport, rfd)?;
+
+    let builder = thread::Builder::new().name("log-handle".into());
+
+    let log_handle = builder.spawn(move || -> Result<()> {
         let mut reader = unsafe { File::from_raw_fd(rfd) };
         if log_vport > 0 {
             let listenfd = socket::socket(
@@ -188,29 +326,54 @@ fn main() -> Result<()> {
         let mut stdout_writer = io::stdout();
         let _ = io::copy(&mut reader, &mut stdout_writer)?;
         Ok(())
-    });
+    })?;
 
     let writer = unsafe { File::from_raw_fd(wfd) };
     // Recreate a logger with the log level get from "/proc/cmdline".
-    let (logger, _logger_async_guard) =
+    let (logger, logger_async_guard) =
         logging::create_logger(NAME, "agent", config.log_level, writer);
 
     announce(&logger, &config);
 
-    // This "unused" variable is required as it enables the global (and crucially static) logger,
+    // This variable is required as it enables the global (and crucially static) logger,
     // which is required to satisfy the the lifetime constraints of the auto-generated gRPC code.
-    let _guard = slog_scope::set_global_logger(logger.new(o!("subsystem" => "rpc")));
+    let global_logger_guard = slog_scope::set_global_logger(logger.new(o!("subsystem" => "rpc")));
+    global_logger_guard.cancel_reset();
 
-    let mut _log_guard: Result<(), log::SetLoggerError> = Ok(());
+    let mut ttrpc_log_guard: Result<(), log::SetLoggerError> = Ok(());
 
     if config.log_level == slog::Level::Trace {
         // Redirect ttrpc log calls to slog iff full debug requested
-        _log_guard = Ok(slog_stdlog::init().map_err(|e| e)?);
+        ttrpc_log_guard = Ok(slog_stdlog::init().map_err(|e| e)?);
     }
 
     start_sandbox(&logger, &config, init_mode)?;
 
-    let _ = log_handle.join();
+    // Install a NOP logger for the remainder of the shutdown sequence
+    // to ensure any log calls made by local crates using the scope logger
+    // don't fail.
+    let global_logger_guard2 =
+        slog_scope::set_global_logger(slog::Logger::root(slog::Discard, o!()));
+    global_logger_guard2.cancel_reset();
+
+    //drop(global_logger_guard);
+    drop(logger_async_guard);
+
+    // Force uninterruptible logger thread to detect an error and end.
+    let _ = unistd::close(wfd);
+
+    let _ = unistd::close(rfd);
+
+    drop(ttrpc_log_guard);
+
+    // Shutdown logger thread
+    shutdown_tx.send(true)?;
+
+    let _ = log_handle.join().map_err(|e| anyhow!("{:?}", e))?;
+
+    if config.log_level >= slog::Level::Debug {
+        eprintln!("{} shutdown complete", NAME);
+    }
 
     Ok(())
 }
@@ -223,7 +386,7 @@ fn start_sandbox(logger: &Logger, config: &agentConfig, init_mode: bool) -> Resu
     if config.debug_console {
         let thread_logger = logger.clone();
 
-        let builder = thread::Builder::new();
+        let builder = thread::Builder::new().name("start-sandbox".into());
 
         let handle = builder.spawn(move || {
             let shells = shells.lock().unwrap();
@@ -250,13 +413,25 @@ fn start_sandbox(logger: &Logger, config: &agentConfig, init_mode: bool) -> Resu
 
     let sandbox = Arc::new(Mutex::new(s));
 
-    setup_signal_handler(&logger, sandbox.clone()).unwrap();
-    watch_uevents(sandbox.clone());
+    // This is awkward but crossbeam channels do not support pubsub, meaning
+    // the message needs to be sent to every thread which is listening on the
+    // channel.
+    //
+    // If new threads are created, this number *must* be increased to take
+    // account of them. Otherwise, the agent will not shutdown.
+    let threads_to_stop = 2;
+
+    // Create a channel to inform threads to shut themselves down
+    let (shutdown_tx, shutdown_rx) = bounded::<bool>(threads_to_stop);
+
+    let signal_thread_handler =
+        setup_signal_handler(&logger, shutdown_rx.clone(), sandbox.clone()).map_err(|e| e)?;
+
+    let uevents_thread_handler = watch_uevents(shutdown_rx.clone(), sandbox.clone());
 
     let (tx, rx) = mpsc::channel::<i32>();
     sandbox.lock().unwrap().sender = Some(tx);
 
-    // vsock:///dev/vsock, port
     let mut server = rpc::start(sandbox, config.server_addr.as_str());
 
     let _ = server.start().unwrap();
@@ -265,90 +440,27 @@ fn start_sandbox(logger: &Logger, config: &agentConfig, init_mode: bool) -> Resu
 
     server.shutdown();
 
+    // Request helper threads stop
+    for i in 0..threads_to_stop {
+        shutdown_tx.send(true).context(format!(
+            "failed to request shutdown of helper thread {} of {}",
+            i, threads_to_stop
+        ))?;
+    }
+
+    // Wait for the helper threads to end
+    uevents_thread_handler
+        .join()
+        .map_err(|e| anyhow!("{:?}", e))?;
+
+    signal_thread_handler
+        .join()
+        .map_err(|e| anyhow!("{:?}", e))?;
+
     if let Some(handle) = shell_handle {
         handle.join().map_err(|e| anyhow!("{:?}", e))?;
     }
 
-    Ok(())
-}
-
-use nix::sys::wait::WaitPidFlag;
-
-fn setup_signal_handler(logger: &Logger, sandbox: Arc<Mutex<Sandbox>>) -> Result<()> {
-    let logger = logger.new(o!("subsystem" => "signals"));
-
-    set_child_subreaper(true)
-        .map_err(|err| anyhow!(err).context("failed to setup agent as a child subreaper"))?;
-
-    let signals = Signals::new(&[SIGCHLD])?;
-
-    thread::spawn(move || {
-        'outer: for sig in signals.forever() {
-            info!(logger, "received signal"; "signal" => sig);
-
-            // sevral signals can be combined together
-            // as one. So loop around to reap all
-            // exited children
-            'inner: loop {
-                let wait_status = match wait::waitpid(
-                    Some(Pid::from_raw(-1)),
-                    Some(WaitPidFlag::WNOHANG | WaitPidFlag::__WALL),
-                ) {
-                    Ok(s) => {
-                        if s == WaitStatus::StillAlive {
-                            continue 'outer;
-                        }
-                        s
-                    }
-                    Err(e) => {
-                        info!(
-                            logger,
-                            "waitpid reaper failed";
-                            "error" => e.as_errno().unwrap().desc()
-                        );
-                        continue 'outer;
-                    }
-                };
-
-                let pid = wait_status.pid();
-                if let Some(pid) = pid {
-                    let raw_pid = pid.as_raw();
-                    let child_pid = format!("{}", raw_pid);
-
-                    let logger = logger.new(o!("child-pid" => child_pid));
-
-                    let mut sandbox = sandbox.lock().unwrap();
-                    let process = sandbox.find_process(raw_pid);
-                    if process.is_none() {
-                        info!(logger, "child exited unexpectedly");
-                        continue 'inner;
-                    }
-
-                    let mut p = process.unwrap();
-
-                    if p.exit_pipe_w.is_none() {
-                        error!(logger, "the process's exit_pipe_w isn't set");
-                        continue 'inner;
-                    }
-                    let pipe_write = p.exit_pipe_w.unwrap();
-                    let ret: i32;
-
-                    match wait_status {
-                        WaitStatus::Exited(_, c) => ret = c,
-                        WaitStatus::Signaled(_, sig, _) => ret = sig as i32,
-                        _ => {
-                            info!(logger, "got wrong status for process";
-                                  "child-status" => format!("{:?}", wait_status));
-                            continue 'inner;
-                        }
-                    }
-
-                    p.exit_code = ret;
-                    let _ = unistd::close(pipe_write);
-                }
-            }
-        }
-    });
     Ok(())
 }
 
@@ -539,8 +651,10 @@ fn run_debug_console_shell(logger: &Logger, shell: &str, socket_fd: RawFd) -> Re
             // channel that used to sync between thread and main process
             let (tx, rx) = mpsc::channel::<i32>();
 
+            let builder = thread::Builder::new().name("console-shell".into());
+
             // start a thread to do IO copy between socket and pseduo.master
-            thread::spawn(move || {
+            builder.spawn(move || {
                 let mut master_reader = unsafe { File::from_raw_fd(master_fd) };
                 let mut master_writer = unsafe { File::from_raw_fd(master_fd) };
                 let mut socket_reader = unsafe { File::from_raw_fd(socket_fd) };
@@ -614,7 +728,7 @@ fn run_debug_console_shell(logger: &Logger, shell: &str, socket_fd: RawFd) -> Re
                         }
                     }
                 }
-            });
+            })?;
 
             let wait_status = wait::waitpid(child_pid, None);
             info!(logger, "debug console process exit code: {:?}", wait_status);
