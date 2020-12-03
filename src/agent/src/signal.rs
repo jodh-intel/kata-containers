@@ -16,6 +16,7 @@ use slog::{error, info, o, warn, Logger};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::thread::JoinHandle;
+use tracing::instrument;
 use unistd::Pid;
 
 fn handle_signals(logger: Logger, ch: Sender<i32>, signals: Signals) {
@@ -28,6 +29,7 @@ fn handle_signals(logger: Logger, ch: Sender<i32>, signals: Signals) {
     }
 }
 
+#[instrument]
 pub fn setup_signal_handler(
     logger: &Logger,
     shutdown: Receiver<bool>,

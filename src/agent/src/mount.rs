@@ -27,6 +27,7 @@ use crate::protocols::agent::Storage;
 use crate::Sandbox;
 use anyhow::{anyhow, Context, Result};
 use slog::Logger;
+use tracing::instrument;
 
 pub const DRIVER9PTYPE: &str = "9p";
 pub const DRIVERVIRTIOFSTYPE: &str = "virtio-fs";
@@ -162,6 +163,7 @@ pub struct BareMount<'a> {
 // * evaluate all symlinks
 // * ensure the source exists
 impl<'a> BareMount<'a> {
+    #[instrument]
     pub fn new(
         s: &'a str,
         d: &'a str,
@@ -180,6 +182,7 @@ impl<'a> BareMount<'a> {
         }
     }
 
+    #[instrument]
     pub fn mount(&self) -> Result<()> {
         let source;
         let dest;
@@ -430,6 +433,7 @@ fn parse_mount_flags_and_options(options_vec: Vec<&str>) -> (MsFlags, String) {
 // associated operations such as waiting for the device to show up, and mount
 // it to a specific location, according to the type of handler chosen, and for
 // each storage.
+#[instrument]
 pub fn add_storages(
     logger: Logger,
     storages: Vec<Storage>,
@@ -488,6 +492,7 @@ fn mount_to_rootfs(logger: &Logger, m: &INIT_MOUNT) -> Result<()> {
     Ok(())
 }
 
+#[instrument]
 pub fn general_mount(logger: &Logger) -> Result<()> {
     let logger = logger.new(o!("subsystem" => "mount"));
 
@@ -505,6 +510,7 @@ pub fn get_mount_fs_type(mount_point: &str) -> Result<String> {
 
 // get_mount_fs_type_from_file returns the FS type corresponding to the passed mount point and
 // any error ecountered.
+#[instrument]
 pub fn get_mount_fs_type_from_file(mount_file: &str, mount_point: &str) -> Result<String> {
     if mount_point == "" {
         return Err(anyhow!("Invalid mount point {}", mount_point));
@@ -535,6 +541,7 @@ pub fn get_mount_fs_type_from_file(mount_file: &str, mount_point: &str) -> Resul
     ))
 }
 
+#[instrument]
 pub fn get_cgroup_mounts(
     logger: &Logger,
     cg_path: &str,
@@ -625,6 +632,7 @@ pub fn get_cgroup_mounts(
     Ok(cg_mounts)
 }
 
+#[instrument]
 pub fn cgroups_mount(logger: &Logger, unified_cgroup_hierarchy: bool) -> Result<()> {
     let logger = logger.new(o!("subsystem" => "mount"));
 
@@ -640,6 +648,7 @@ pub fn cgroups_mount(logger: &Logger, unified_cgroup_hierarchy: bool) -> Result<
     Ok(())
 }
 
+#[instrument]
 pub fn remove_mounts(mounts: &[String]) -> Result<()> {
     for m in mounts.iter() {
         mount::umount(m.as_str()).context(format!("failed to umount {:?}", m))?;

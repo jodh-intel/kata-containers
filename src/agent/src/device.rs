@@ -10,6 +10,7 @@ use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::sync::{mpsc, Arc, Mutex};
+use tracing::instrument;
 
 use crate::linux_abi::*;
 use crate::mount::{DRIVERBLKTYPE, DRIVERMMIOBLKTYPE, DRIVERNVDIMMTYPE, DRIVERSCSITYPE};
@@ -51,10 +52,12 @@ lazy_static! {
     };
 }
 
+#[instrument]
 pub fn rescan_pci_bus() -> Result<()> {
     online_device(SYSFS_PCI_BUS_RESCAN_FILE)
 }
 
+#[instrument]
 pub fn online_device(path: &str) -> Result<()> {
     fs::write(path, "1")?;
     Ok(())
@@ -149,6 +152,7 @@ fn get_device_name(sandbox: &Arc<Mutex<Sandbox>>, dev_addr: &str) -> Result<Stri
     Ok(format!("{}/{}", SYSTEM_DEV_PATH, &dev_name))
 }
 
+#[instrument]
 pub fn get_scsi_device_name(sandbox: &Arc<Mutex<Sandbox>>, scsi_addr: &str) -> Result<String> {
     let dev_sub_path = format!("{}{}/{}", SCSI_HOST_CHANNEL, scsi_addr, SCSI_BLOCK_SUFFIX);
 
@@ -156,6 +160,7 @@ pub fn get_scsi_device_name(sandbox: &Arc<Mutex<Sandbox>>, scsi_addr: &str) -> R
     get_device_name(sandbox, &dev_sub_path)
 }
 
+#[instrument]
 pub fn get_pci_device_name(sandbox: &Arc<Mutex<Sandbox>>, pci_id: &str) -> Result<String> {
     let pci_addr = get_pci_device_address(pci_id)?;
 
@@ -357,6 +362,7 @@ impl DevIndex {
     }
 }
 
+#[instrument]
 pub fn add_devices(
     devices: &[Device],
     spec: &mut Spec,
@@ -402,6 +408,7 @@ fn add_device(
 // update_device_cgroup update the device cgroup for container
 // to not allow access to the guest root partition. This prevents
 // the container from being able to access the VM rootfs.
+#[instrument]
 pub fn update_device_cgroup(spec: &mut Spec) -> Result<()> {
     let meta = fs::metadata(VM_ROOTFS)?;
     let rdev = meta.dev();

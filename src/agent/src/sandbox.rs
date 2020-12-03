@@ -26,6 +26,7 @@ use std::path::Path;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::{thread, time};
+use tracing::instrument;
 
 #[derive(Debug)]
 pub struct Sandbox {
@@ -51,6 +52,7 @@ pub struct Sandbox {
 }
 
 impl Sandbox {
+    #[instrument]
     pub fn new(logger: &Logger) -> Result<Self> {
         let fs_type = get_mount_fs_type("/")?;
         let logger = logger.new(o!("subsystem" => "sandbox"));
@@ -88,6 +90,7 @@ impl Sandbox {
     //
     // It's assumed that caller is calling this method after
     // acquiring a lock on sandbox.
+    #[instrument]
     pub fn set_sandbox_storage(&mut self, path: &str) -> bool {
         match self.storages.get_mut(path) {
             None => {
@@ -110,6 +113,7 @@ impl Sandbox {
     //
     // It's assumed that caller is calling this method after
     // acquiring a lock on sandbox.
+    #[instrument]
     pub fn unset_sandbox_storage(&mut self, path: &str) -> Result<bool> {
         match self.storages.get_mut(path) {
             None => Err(anyhow!("Sandbox storage with path {} not found", path)),
@@ -129,6 +133,7 @@ impl Sandbox {
     //
     // It's assumed that caller is calling this method after
     // acquiring a lock on sandbox.
+    #[instrument]
     pub fn remove_sandbox_storage(&self, path: &str) -> Result<()> {
         let mounts = vec![path.to_string()];
         remove_mounts(&mounts)?;
@@ -142,6 +147,7 @@ impl Sandbox {
     //
     // It's assumed that caller is calling this method after
     // acquiring a lock on sandbox.
+    #[instrument]
     pub fn unset_and_remove_sandbox_storage(&mut self, path: &str) -> Result<()> {
         if self.unset_sandbox_storage(path)? {
             return self.remove_sandbox_storage(path);
@@ -158,6 +164,7 @@ impl Sandbox {
         self.hostname = hostname;
     }
 
+    #[instrument]
     pub fn setup_shared_namespaces(&mut self) -> Result<bool> {
         // Set up shared IPC namespace
         self.shared_ipcns = Namespace::new(&self.logger)
@@ -174,10 +181,12 @@ impl Sandbox {
         Ok(true)
     }
 
+    #[instrument]
     pub fn add_container(&mut self, c: LinuxContainer) {
         self.containers.insert(c.id.clone(), c);
     }
 
+    #[instrument]
     pub fn update_shared_pidns(&mut self, c: &LinuxContainer) -> Result<()> {
         // Populate the shared pid path only if this is an infra container and
         // sandbox_pidns has not been passed in the create_sandbox request.
@@ -201,10 +210,12 @@ impl Sandbox {
         Ok(())
     }
 
+    #[instrument]
     pub fn get_container(&mut self, id: &str) -> Option<&mut LinuxContainer> {
         self.containers.get_mut(id)
     }
 
+    #[instrument]
     pub fn find_process(&mut self, pid: pid_t) -> Option<&mut Process> {
         for (_, c) in self.containers.iter_mut() {
             if c.processes.get(&pid).is_some() {
@@ -215,6 +226,7 @@ impl Sandbox {
         None
     }
 
+    #[instrument]
     pub fn destroy(&mut self) -> Result<()> {
         for ctr in self.containers.values_mut() {
             ctr.destroy()?;
@@ -222,6 +234,7 @@ impl Sandbox {
         Ok(())
     }
 
+    #[instrument]
     pub fn online_cpu_memory(&self, req: &OnlineCPUMemRequest) -> Result<()> {
         if req.nb_cpus > 0 {
             // online cpus
@@ -261,6 +274,7 @@ impl Sandbox {
         Ok(())
     }
 
+    #[instrument]
     pub fn add_hooks(&mut self, dir: &str) -> Result<()> {
         let mut hooks = Hooks::default();
         if let Ok(hook) = self.find_hooks(dir, "prestart") {
@@ -312,6 +326,7 @@ impl Sandbox {
         Ok(hooks)
     }
 
+    #[instrument]
     pub fn run_oom_event_monitor(&self, rx: Receiver<String>, container_id: String) {
         let tx = self.event_tx.clone();
         let logger = self.logger.clone();

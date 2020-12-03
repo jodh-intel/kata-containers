@@ -51,6 +51,7 @@ use std::path::Path;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, RwLock};
 use std::{io, thread, thread::JoinHandle};
+use tracing::info_span;
 use unistd::Pid;
 
 mod config;
@@ -65,6 +66,7 @@ mod sandbox;
 mod signal;
 #[cfg(test)]
 mod test_utils;
+mod tracer;
 mod uevent;
 mod version;
 
@@ -347,7 +349,23 @@ fn main() -> Result<()> {
         ttrpc_log_guard = Ok(slog_stdlog::init().map_err(|e| e)?);
     }
 
-    start_sandbox(&logger, &config, init_mode)?;
+    if config.tracing != tracer::TraceType::Disabled {
+        // A NOP trace implementation will be used if this isn't called
+        tracer::setup_tracing(&logger);
+    }
+
+    let trace_subscriber = tracer::get_subscriber(NAME);
+
+    tracing::subscriber::with_default(trace_subscriber, || -> Result<()> {
+        let root_span = info_span!("root-span");
+
+        // XXX: Start the root trace transaction.
+        //
+        // XXX: Note that *ALL* spans needs to start after this point!!
+        let _enter = root_span.enter();
+
+        start_sandbox(&logger, &config, init_mode)
+    })?;
 
     // Install a NOP logger for the remainder of the shutdown sequence
     // to ensure any log calls made by local crates using the scope logger

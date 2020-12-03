@@ -47,6 +47,7 @@ use netlink::{RtnlHandle, NETLINK_ROUTE};
 
 use libc::{self, c_ushort, pid_t, winsize, TIOCSWINSZ};
 use std::convert::TryFrom;
+use std::fmt::Debug;
 use std::fs;
 use std::os::unix::io::RawFd;
 use std::os::unix::prelude::PermissionsExt;
@@ -61,6 +62,8 @@ use std::io::{BufRead, BufReader};
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 
+use tracing::instrument;
+
 const CONTAINER_BASE: &str = "/run/kata-containers";
 const MODPROBE_PATH: &str = "/sbin/modprobe";
 
@@ -71,12 +74,13 @@ macro_rules! sl {
     };
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct agentService {
     sandbox: Arc<Mutex<Sandbox>>,
 }
 
 impl agentService {
+    #[instrument]
     fn do_create_container(&self, req: protocols::agent::CreateContainerRequest) -> Result<()> {
         let cid = req.container_id.clone();
 
@@ -171,6 +175,7 @@ impl agentService {
         Ok(())
     }
 
+    #[instrument]
     fn do_start_container(&self, req: protocols::agent::StartContainerRequest) -> Result<()> {
         let cid = req.container_id;
 
@@ -196,6 +201,7 @@ impl agentService {
         Ok(())
     }
 
+    #[instrument]
     fn do_remove_container(&self, req: protocols::agent::RemoveContainerRequest) -> Result<()> {
         let cid = req.container_id.clone();
         let mut cmounts: Vec<String> = vec![];
@@ -268,6 +274,7 @@ impl agentService {
         Ok(())
     }
 
+    #[instrument]
     fn do_exec_process(&self, req: protocols::agent::ExecProcessRequest) -> Result<()> {
         let cid = req.container_id.clone();
         let exec_id = req.exec_id.clone();
@@ -296,6 +303,7 @@ impl agentService {
         Ok(())
     }
 
+    #[instrument]
     fn do_signal_process(&self, req: protocols::agent::SignalProcessRequest) -> Result<()> {
         let cid = req.container_id.clone();
         let eid = req.exec_id.clone();
@@ -330,6 +338,7 @@ impl agentService {
         Ok(())
     }
 
+    #[instrument]
     fn do_wait_process(
         &self,
         req: protocols::agent::WaitProcessRequest,
@@ -420,6 +429,7 @@ impl agentService {
         Ok(resp)
     }
 
+    #[instrument]
     fn do_write_stream(
         &self,
         req: protocols::agent::WriteStreamRequest,
@@ -468,6 +478,7 @@ impl agentService {
         Ok(resp)
     }
 
+    #[instrument]
     fn do_read_stream(
         &self,
         req: protocols::agent::ReadStreamRequest,
@@ -508,6 +519,7 @@ impl agentService {
 }
 
 impl protocols::agent_ttrpc::AgentService for agentService {
+    #[instrument]
     fn create_container(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -519,6 +531,7 @@ impl protocols::agent_ttrpc::AgentService for agentService {
         }
     }
 
+    #[instrument]
     fn start_container(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -530,6 +543,7 @@ impl protocols::agent_ttrpc::AgentService for agentService {
         }
     }
 
+    #[instrument]
     fn remove_container(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -541,6 +555,7 @@ impl protocols::agent_ttrpc::AgentService for agentService {
         }
     }
 
+    #[instrument]
     fn exec_process(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -552,6 +567,7 @@ impl protocols::agent_ttrpc::AgentService for agentService {
         }
     }
 
+    #[instrument]
     fn signal_process(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -563,6 +579,7 @@ impl protocols::agent_ttrpc::AgentService for agentService {
         }
     }
 
+    #[instrument]
     fn wait_process(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -572,6 +589,7 @@ impl protocols::agent_ttrpc::AgentService for agentService {
             .map_err(|e| ttrpc_error(ttrpc::Code::INTERNAL, e.to_string()))
     }
 
+    #[instrument]
     fn list_processes(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -656,6 +674,7 @@ impl protocols::agent_ttrpc::AgentService for agentService {
         Ok(resp)
     }
 
+    #[instrument]
     fn update_container(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -690,6 +709,7 @@ impl protocols::agent_ttrpc::AgentService for agentService {
         Ok(resp)
     }
 
+    #[instrument]
     fn stats_container(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -710,6 +730,7 @@ impl protocols::agent_ttrpc::AgentService for agentService {
             .map_err(|e| ttrpc_error(ttrpc::Code::INTERNAL, e.to_string()))
     }
 
+    #[instrument]
     fn pause_container(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -732,6 +753,7 @@ impl protocols::agent_ttrpc::AgentService for agentService {
         Ok(Empty::new())
     }
 
+    #[instrument]
     fn resume_container(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -754,6 +776,7 @@ impl protocols::agent_ttrpc::AgentService for agentService {
         Ok(Empty::new())
     }
 
+    #[instrument]
     fn write_stdin(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -763,6 +786,7 @@ impl protocols::agent_ttrpc::AgentService for agentService {
             .map_err(|e| ttrpc_error(ttrpc::Code::INTERNAL, e.to_string()))
     }
 
+    #[instrument]
     fn read_stdout(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -772,6 +796,7 @@ impl protocols::agent_ttrpc::AgentService for agentService {
             .map_err(|e| ttrpc_error(ttrpc::Code::INTERNAL, e.to_string()))
     }
 
+    #[instrument]
     fn read_stderr(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -781,6 +806,7 @@ impl protocols::agent_ttrpc::AgentService for agentService {
             .map_err(|e| ttrpc_error(ttrpc::Code::INTERNAL, e.to_string()))
     }
 
+    #[instrument]
     fn close_stdin(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -811,6 +837,7 @@ impl protocols::agent_ttrpc::AgentService for agentService {
         Ok(Empty::new())
     }
 
+    #[instrument]
     fn tty_win_resize(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -849,6 +876,7 @@ impl protocols::agent_ttrpc::AgentService for agentService {
         Ok(Empty::new())
     }
 
+    #[instrument]
     fn update_interface(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -880,6 +908,7 @@ impl protocols::agent_ttrpc::AgentService for agentService {
         Ok(iface)
     }
 
+    #[instrument]
     fn update_routes(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -919,6 +948,7 @@ impl protocols::agent_ttrpc::AgentService for agentService {
         Ok(routes)
     }
 
+    #[instrument]
     fn list_interfaces(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -942,6 +972,7 @@ impl protocols::agent_ttrpc::AgentService for agentService {
         Ok(interface)
     }
 
+    #[instrument]
     fn list_routes(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -966,6 +997,7 @@ impl protocols::agent_ttrpc::AgentService for agentService {
         Ok(routes)
     }
 
+    #[instrument]
     fn start_tracing(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -975,6 +1007,7 @@ impl protocols::agent_ttrpc::AgentService for agentService {
         Ok(Empty::new())
     }
 
+    #[instrument]
     fn stop_tracing(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -983,6 +1016,7 @@ impl protocols::agent_ttrpc::AgentService for agentService {
         Ok(Empty::new())
     }
 
+    #[instrument]
     fn create_sandbox(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -1045,6 +1079,7 @@ impl protocols::agent_ttrpc::AgentService for agentService {
         Ok(Empty::new())
     }
 
+    #[instrument]
     fn destroy_sandbox(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -1062,6 +1097,7 @@ impl protocols::agent_ttrpc::AgentService for agentService {
         Ok(Empty::new())
     }
 
+    #[instrument]
     fn add_arp_neighbors(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -1091,6 +1127,7 @@ impl protocols::agent_ttrpc::AgentService for agentService {
         Ok(Empty::new())
     }
 
+    #[instrument]
     fn online_cpu_mem(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -1106,6 +1143,7 @@ impl protocols::agent_ttrpc::AgentService for agentService {
         Ok(Empty::new())
     }
 
+    #[instrument]
     fn reseed_random_dev(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -1117,6 +1155,7 @@ impl protocols::agent_ttrpc::AgentService for agentService {
         Ok(Empty::new())
     }
 
+    #[instrument]
     fn get_guest_details(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -1143,6 +1182,7 @@ impl protocols::agent_ttrpc::AgentService for agentService {
         Ok(resp)
     }
 
+    #[instrument]
     fn mem_hotplug_by_probe(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -1154,6 +1194,7 @@ impl protocols::agent_ttrpc::AgentService for agentService {
         Ok(Empty::new())
     }
 
+    #[instrument]
     fn set_guest_date_time(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -1165,6 +1206,7 @@ impl protocols::agent_ttrpc::AgentService for agentService {
         Ok(Empty::new())
     }
 
+    #[instrument]
     fn copy_file(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -1175,6 +1217,7 @@ impl protocols::agent_ttrpc::AgentService for agentService {
         Ok(Empty::new())
     }
 
+    #[instrument]
     fn get_metrics(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -1190,6 +1233,7 @@ impl protocols::agent_ttrpc::AgentService for agentService {
         }
     }
 
+    #[instrument]
     fn get_oom_event(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -1214,9 +1258,10 @@ impl protocols::agent_ttrpc::AgentService for agentService {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct healthService;
 impl protocols::health_ttrpc::Health for healthService {
+    #[instrument]
     fn check(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -1228,6 +1273,7 @@ impl protocols::health_ttrpc::Health for healthService {
         Ok(resp)
     }
 
+    #[instrument]
     fn version(
         &self,
         _ctx: &ttrpc::TtrpcContext,
@@ -1242,6 +1288,7 @@ impl protocols::health_ttrpc::Health for healthService {
     }
 }
 
+#[instrument]
 fn get_memory_info(block_size: bool, hotplug: bool) -> Result<(u64, bool)> {
     let mut size: u64 = 0;
     let mut plug: bool = false;
@@ -1290,6 +1337,7 @@ fn get_memory_info(block_size: bool, hotplug: bool) -> Result<(u64, bool)> {
     Ok((size, plug))
 }
 
+#[instrument]
 fn get_agent_details() -> AgentDetails {
     let mut detail = AgentDetails::new();
 
@@ -1309,6 +1357,7 @@ fn get_agent_details() -> AgentDetails {
     detail
 }
 
+#[instrument]
 fn read_stream(fd: RawFd, l: usize) -> Result<Vec<u8>> {
     let mut v: Vec<u8> = Vec::with_capacity(l);
     unsafe {
@@ -1337,6 +1386,7 @@ fn read_stream(fd: RawFd, l: usize) -> Result<Vec<u8>> {
     Ok(v)
 }
 
+#[instrument]
 fn find_process<'a>(
     sandbox: &'a mut Sandbox,
     cid: &'a str,
@@ -1357,6 +1407,7 @@ fn find_process<'a>(
     ctr.get_process(eid).map_err(|_| anyhow!("Invalid exec id"))
 }
 
+#[instrument]
 pub fn start(s: Arc<Mutex<Sandbox>>, server_address: &str) -> ttrpc::Server {
     let agent_service = Box::new(agentService { sandbox: s })
         as Box<dyn protocols::agent_ttrpc::AgentService + Send + Sync>;
@@ -1393,6 +1444,7 @@ pub fn start(s: Arc<Mutex<Sandbox>>, server_address: &str) -> ttrpc::Server {
 // path set by the spec, since we will always ignore it. Indeed, it makes no
 // sense to rely on the namespace path provided by the host since namespaces
 // are different inside the guest.
+#[instrument]
 fn update_container_namespaces(
     sandbox: &Sandbox,
     spec: &mut Spec,
@@ -1430,6 +1482,7 @@ fn update_container_namespaces(
     Ok(())
 }
 
+#[instrument]
 fn append_guest_hooks(s: &Sandbox, oci: &mut Spec) {
     if s.hooks.is_none() {
         return;
@@ -1444,6 +1497,7 @@ fn append_guest_hooks(s: &Sandbox, oci: &mut Spec) {
 
 // Check is the container process installed the
 // handler for specific signal.
+#[instrument]
 fn is_signal_handled(pid: pid_t, signum: u32) -> bool {
     let sig_mask: u64 = 1u64 << (signum - 1);
     let file_name = format!("/proc/{}/status", pid);
@@ -1489,6 +1543,7 @@ fn is_signal_handled(pid: pid_t, signum: u32) -> bool {
     false
 }
 
+#[instrument]
 fn do_mem_hotplug_by_probe(addrs: &[u64]) -> Result<()> {
     for addr in addrs.iter() {
         fs::write(SYSFS_MEMORY_HOTPLUG_PROBE_PATH, format!("{:#X}", *addr))?;
@@ -1496,6 +1551,7 @@ fn do_mem_hotplug_by_probe(addrs: &[u64]) -> Result<()> {
     Ok(())
 }
 
+#[instrument]
 fn do_set_guest_date_time(sec: i64, usec: i64) -> Result<()> {
     let tv = libc::timeval {
         tv_sec: sec,
@@ -1514,6 +1570,7 @@ fn do_set_guest_date_time(sec: i64, usec: i64) -> Result<()> {
     Ok(())
 }
 
+#[instrument]
 fn do_copy_file(req: &CopyFileRequest) -> Result<()> {
     let path = PathBuf::from(req.path.as_str());
 
@@ -1577,6 +1634,7 @@ fn do_copy_file(req: &CopyFileRequest) -> Result<()> {
 // - config.json at /<CONTAINER_BASE>/<cid>/config.json
 // - container rootfs bind mounted at /<CONTAINER_BASE>/<cid>/rootfs
 // - modify container spec root to point to /<CONTAINER_BASE>/<cid>/rootfs
+#[instrument]
 fn setup_bundle(cid: &str, spec: &mut Spec) -> Result<PathBuf> {
     if spec.root.is_none() {
         return Err(nix::Error::Sys(Errno::EINVAL).into());
@@ -1615,6 +1673,7 @@ fn setup_bundle(cid: &str, spec: &mut Spec) -> Result<PathBuf> {
     Ok(olddir)
 }
 
+#[instrument]
 fn load_kernel_module(module: &protocols::agent::KernelModule) -> Result<()> {
     if module.name == "" {
         return Err(anyhow!("Kernel module name is empty"));

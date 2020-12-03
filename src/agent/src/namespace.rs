@@ -15,6 +15,7 @@ use std::thread::{self};
 
 use crate::mount::{BareMount, FLAGS};
 use slog::Logger;
+use tracing::instrument;
 
 //use container::Process;
 const PERSISTENT_NS_DIR: &str = "/var/run/sandbox-ns";
@@ -22,6 +23,7 @@ pub const NSTYPEIPC: &str = "ipc";
 pub const NSTYPEUTS: &str = "uts";
 pub const NSTYPEPID: &str = "pid";
 
+#[instrument]
 pub fn get_current_thread_ns_path(ns_type: &str) -> String {
     format!(
         "/proc/{}/task/{}/ns/{}",
@@ -42,6 +44,7 @@ pub struct Namespace {
 }
 
 impl Namespace {
+    #[instrument]
     pub fn new(logger: &Logger) -> Self {
         Namespace {
             logger: logger.clone(),
@@ -77,6 +80,7 @@ impl Namespace {
 
     // setup creates persistent namespace without switching to it.
     // Note, pid namespaces cannot be persisted.
+    #[instrument]
     pub fn setup(mut self) -> Result<Self> {
         fs::create_dir_all(&self.persistent_ns_dir)?;
 

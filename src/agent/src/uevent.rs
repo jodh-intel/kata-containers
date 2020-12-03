@@ -13,6 +13,7 @@ use slog::Logger;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::thread::JoinHandle;
+use tracing::instrument;
 
 #[derive(Debug, Default)]
 struct Uevent {
@@ -144,6 +145,8 @@ fn get_uevents(logger: Logger, rtnl: RtnlHandle, ch: Sender<String>) {
         }
     }
 }
+
+#[instrument]
 pub fn watch_uevents(shutdown: Receiver<bool>, sandbox: Arc<Mutex<Sandbox>>) -> JoinHandle<()> {
     let logger = sandbox
         .lock()
