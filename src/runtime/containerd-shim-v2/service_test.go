@@ -19,12 +19,22 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func NewService(id string) (service, error) {
+// TestService is a wrapper for the private service object
+type TestService struct {
+	service *service
+}
+
+// Create is a wrapper for the private service Create call
+func (s *TestService) Create(ctx context.Context, task *taskAPI.CreateTaskRequest) (_ *taskAPI.CreateTaskResponse, err error) {
+	return s.service.Create(ctx, task)
+}
+
+func NewTestService(id string) (TestService, error) {
 	ctx := context.Background()
 
 	ctx, cancel := context.WithCancel(ctx)
 
-	s := service{
+	s := &service{
 		id:         id,
 		pid:        uint32(os.Getpid()),
 		ctx:        ctx,
@@ -34,7 +44,11 @@ func NewService(id string) (service, error) {
 		cancel:     cancel,
 	}
 
-	return s, nil
+	ts := TestService{
+		service: s,
+	}
+
+	return ts, nil
 }
 
 func TestServiceCreate(t *testing.T) {
@@ -44,6 +58,7 @@ func TestServiceCreate(t *testing.T) {
 	assert := assert.New(t)
 
 	tmpdir, err := ioutil.TempDir("", "")
+	assert.NoError(err)
 	defer os.RemoveAll(tmpdir)
 
 	bundleDir := filepath.Join(tmpdir, "bundle")
@@ -52,7 +67,7 @@ func TestServiceCreate(t *testing.T) {
 
 	ctx := context.Background()
 
-	s, err := NewService("foo")
+	ts, err := NewTestService("foo")
 	assert.NoError(err)
 
 	for i, d := range ktu.ContainerIDTestData {
@@ -68,7 +83,7 @@ func TestServiceCreate(t *testing.T) {
 			Bundle: bundleDir,
 		}
 
-		_, err = s.Create(ctx, &task)
+		_, err = ts.Create(ctx, &task)
 		assert.Error(err, msg)
 
 		if d.ID == "" {
