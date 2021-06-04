@@ -239,12 +239,6 @@ tracing.
    $ sudo modprobe vhost_vsock
    ```
 
-- VSOCK support must be enabled in the Kata Configuration file.
-
-  ```
-  $ sudo sed 's/#use_vsock =.*/use_vsock = true/g' /usr/share/defaults/kata-containers/configuration.toml
-  ```
-
 ### Guest environment
 
 - Guest kernel must support the VSOCK socket type:
